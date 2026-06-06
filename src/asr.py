@@ -13,20 +13,24 @@ import pyaudio
 class AudioRecognizer:
     """音频识别器 - 将语音实时转换为文字"""
 
-    def __init__(self, model_size="base", language="en"):
+    def __init__(self, model_size="base", language="en", silence_timeout=10):
         """
         初始化识别器
 
         Args:
             model_size: 模型大小 (tiny/base/small/medium/large)
             language: 源语言代码 (en/zh/ja等)
+            silence_timeout: 静音超时时间（秒），超过此时间自动停止
         """
         print(f"正在加载 Whisper {model_size} 模型...")
         self.model = whisper.load_model(model_size)
         self.language = language
         self.is_listening = False
+        self.silence_timeout = silence_timeout  # 静音超时时间
+        self.last_audio_time = time.time()      # 最后有声音的时间
+        self.silence_threshold = 0.01           # 静音阈值
 
-        # 音频参数
+        self.latest_text=""
         self.sample_rate = 16000  # Whisper 需要 16kHz
         self.chunk_size = 1024    # 每次读取的帧数
         self.channels = 1         # 单声道
@@ -40,19 +44,20 @@ class AudioRecognizer:
 
         # 回调函数
         self.on_result_callback = None
+        self.on_silence_callback = None  # 静音超时回调
 
-        print(f"✅ 识别器初始化完成 (模型: {model_size}, 语言: {language})")
+        print(f"✅ 识别器初始化完成 (模型: {model_size}, 语言: {language}, 静音超时: {silence_timeout}秒)")
 
     def start_listening(self, callback):
         """
         开始监听麦克风
 
-        Args:
-            callback: 回调函数，接收识别到的文本
+        不使用回调，改用轮询获取结果
         """
         self.on_result_callback = callback
         self.is_listening = True
-
+        self.is_listening = True
+        self.latest_text = ""
         # 初始化 PyAudio
         self.p = pyaudio.PyAudio()
 
@@ -83,10 +88,105 @@ class AudioRecognizer:
         """
         if self.is_listening:
             # 将 bytes 转换为 numpy 数组
-            audio_data = np.frombuffer(in_data, dtype=np.int16).astype(np.float32) / 32768.0
+            # PyAudio paInt16 格式需要转换为 float32 并归一化到 [-1.0, 1.0]
+            audio_data = np.frombuffer(in_data, dtype=np.int16)
+            audio_data = audio_data.astype(np.float32) / 32767.0  # 使用 32767 而不是 32768
             self.audio_buffer.extend(audio_data)
+            
+            # 检测是否有声音（通过计算音频能量）
+            audio_energy = np.mean(np.abs(audio_data))
+            if audio_energy > self.silence_threshold:
+                self.last_audio_time = time.time()  # 更新最后有声音的时间
+                #print(f"[DEBUG] 检测到声音，能量: {audio_energy}")
 
         return (None, pyaudio.paContinue)
+
+    def start_listening_without_callback(self, silence_callback=None):
+        """开始监听（不使用回调，改用轮询获取结果）
+        
+        Args:
+            silence_callback: 静音超时回调函数
+        """
+        self.is_listening = True
+        self.latest_text = ""
+        self.last_audio_time = time.time()  # 重置最后有声音的时间
+        self.on_silence_callback = silence_callback
+
+        # 初始化 PyAudio
+        self.p = pyaudio.PyAudio()
+
+        # 打开麦克风流
+        self.stream = self.p.open(
+            format=pyaudio.paInt16,
+            channels=self.channels,
+            rate=self.sample_rate,
+            input=True,
+            frames_per_buffer=self.chunk_size,
+            stream_callback=self._audio_callback
+        )
+
+        self.stream.start_stream()
+        print("🎤 开始监听麦克风...")
+        
+        # 启动识别线程
+        self.recognition_thread = threading.Thread(target=self._recognition_loop_no_callback)
+        self.recognition_thread.daemon = True
+        self.recognition_thread.start()
+        
+        # 启动静音检测线程
+        self.silence_thread = threading.Thread(target=self._silence_monitor)
+        self.silence_thread.daemon = True
+        self.silence_thread.start()
+
+    def _recognition_loop_no_callback(self):
+        """识别循环 - 存储结果到 latest_text"""
+        last_text = ""
+
+        while self.is_listening:
+            if len(self.audio_buffer) > self.sample_rate:
+                try:
+                    audio_data = np.array(self.audio_buffer)
+                    
+                    result = self.model.transcribe(
+                        audio_data,
+                        language=self.language,
+                        fp16=False
+                    )
+                    text = result["text"].strip()
+
+                    if text and text != last_text:
+                        last_text = text
+                        self.latest_text = text  # 存储到变量，不直接回调
+                        print(f"🎤 识别: {text}")
+
+                except Exception as e:
+                    print(f"识别错误: {e}")
+
+            time.sleep(0.5)
+
+    def _silence_monitor(self):
+        """静音检测线程 - 检测长时间静音并自动停止"""
+        while self.is_listening:
+            time.sleep(1)  # 每秒检查一次
+            if self.is_listening:
+                elapsed = time.time() - self.last_audio_time
+                if elapsed >= self.silence_timeout:
+                    print(f"⏰ 检测到静音超过 {self.silence_timeout} 秒，自动停止监听")
+                    self.stop_listening()
+                    if self.on_silence_callback:
+                        self.on_silence_callback()
+                    break
+
+    def get_latest_text(self):
+        """获取最新的识别结果"""
+        text = self.latest_text
+        # 可选：获取后不清空，或者保留用于显示
+        return text
+    
+    def check_silence(self):
+        """检查是否超过静音超时时间"""
+        elapsed = time.time() - self.last_audio_time
+        return elapsed >= self.silence_timeout
 
     def stop_listening(self):
         """停止监听"""
