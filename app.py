@@ -10,6 +10,7 @@ import time
 
 sys.path.append(os.path.dirname(__file__))
 from src.asr import AudioRecognizer
+from src.translator import LocalTranslator
 
 # 页面配置
 st.set_page_config(page_title="AI同声传译助手", page_icon="🎙️", layout="wide")
@@ -23,6 +24,8 @@ if 'original_text' not in st.session_state:
     st.session_state.original_text = ""
 if 'translated_text' not in st.session_state:
     st.session_state.translated_text = ""
+if 'translator' not in st.session_state:
+    st.session_state.translator = None
 
 # 标题
 st.title("🎙️ AI同声传译助手")
@@ -61,16 +64,25 @@ def on_silence_timeout():
 def on_start():
     """开始同传"""
     lang_code = source_lang.split("(")[-1].replace(")", "").strip()
+    
+    # 创建识别器
     st.session_state.recognizer = AudioRecognizer(
         model_size=model_size, 
         language=lang_code,
         silence_timeout=silence_timeout
     )
+    
+    # 创建翻译器（使用本地词典）
+    st.session_state.translator = LocalTranslator(
+        source_lang=lang_code,
+        target_lang='zh'
+    )
+    
     st.session_state.recognizer.start_listening_without_callback(
         silence_callback=on_silence_timeout
     )
     st.session_state.is_listening = True
-    print("[APP] 开始监听")
+    print(f"[APP] 开始监听")
     st.rerun()
 
 def on_stop():
@@ -86,6 +98,8 @@ def on_clear():
     """清空文本"""
     st.session_state.original_text = ""
     st.session_state.translated_text = ""
+    if st.session_state.translator:
+        st.session_state.translator.clear_cache()
     st.rerun()
 
 col_btn1, col_btn2, col_btn3 = st.columns(3)
@@ -108,8 +122,12 @@ if st.session_state.is_listening and st.session_state.recognizer:
     
     if latest_text and latest_text != st.session_state.original_text:
         st.session_state.original_text = latest_text
-        st.session_state.translated_text = f"[翻译] {latest_text}"
-        print(f"[APP] 更新界面: '{latest_text}'")
+        if st.session_state.translator:
+            translated = st.session_state.translator.translate(latest_text, use_context=True)
+            st.session_state.translated_text = translated
+            print(f"[APP] 翻译: '{latest_text}' → '{translated}'")
+        else:
+            st.session_state.translated_text = f"[待翻译] {latest_text}"
     
     time.sleep(0.5)
     st.rerun()
