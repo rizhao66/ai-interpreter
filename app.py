@@ -11,7 +11,7 @@ import time
 sys.path.append(os.path.dirname(__file__))
 from src.asr import AudioRecognizer
 from src.translator import LocalTranslator
-
+from src.correction import SlidingWindowCorrector, ContextualTranslator
 # 页面配置
 st.set_page_config(page_title="AI同声传译助手", page_icon="🎙️", layout="wide")
 
@@ -26,7 +26,12 @@ if 'translated_text' not in st.session_state:
     st.session_state.translated_text = ""
 if 'translator' not in st.session_state:
     st.session_state.translator = None
-
+if 'corrector' not in st.session_state:
+    st.session_state.corrector = SlidingWindowCorrector(window_size=3)
+if 'contextual_translator' not in st.session_state:
+    st.session_state.contextual_translator = None
+if 'should_stop' not in st.session_state:
+    st.session_state.should_stop = False  # 静音超时停止标志
 # 标题
 st.title("🎙️ AI同声传译助手")
 
@@ -36,7 +41,7 @@ with st.sidebar:
     model_size = st.selectbox("识别模型", ["tiny", "base", "small"], index=1)
     source_lang = st.selectbox("源语言", ["英语 (en)", "日语 (ja)", "中文 (zh)"], index=0)
     silence_timeout = st.slider("静音超时时间(秒)", min_value=5, max_value=30, value=10, step=1)
-    
+    auto_correct = st.checkbox("🔧 启用自动纠错", value=True)
     st.divider()
     st.subheader("📊 状态")
     if st.session_state.is_listening:
@@ -57,13 +62,16 @@ with col2:
 
 # 控制按钮回调
 def on_silence_timeout():
-    """静音超时回调"""
-    print("[APP] 静音超时，自动停止同传")
-    on_stop()
+    """静音超时回调（在后台线程中执行，只设置标志）"""
+    print("[APP] 静音超时，设置停止标志")
+    st.session_state.should_stop = True
 
 def on_start():
     """开始同传"""
     lang_code = source_lang.split("(")[-1].replace(")", "").strip()
+    
+    # 重置停止标志
+    st.session_state.should_stop = False
     
     # 创建识别器
     st.session_state.recognizer = AudioRecognizer(
@@ -77,7 +85,20 @@ def on_start():
         source_lang=lang_code,
         target_lang='zh'
     )
-    
+    # 包装为上下文翻译器
+    st.session_state.contextual_translator = ContextualTranslator(st.session_state.translator)
+
+    # 注册技术术语（示例）
+    terms = {
+        "artificial intelligence": "人工智能",
+        "machine learning": "机器学习",
+        "neural network": "神经网络",
+        "deep learning": "深度学习",
+        "computer vision": "计算机视觉",
+        "natural language processing": "自然语言处理",
+    }
+    for source, target in terms.items():
+        st.session_state.contextual_translator.register_term(source, target)
     st.session_state.recognizer.start_listening_without_callback(
         silence_callback=on_silence_timeout
     )
@@ -117,19 +138,32 @@ with col_btn3:
 
 # 实时更新
 if st.session_state.is_listening and st.session_state.recognizer:
-    latest_text = st.session_state.recognizer.get_latest_text()
-    print(f"[APP] 获取最新文本: '{latest_text}'")
-    
-    if latest_text and latest_text != st.session_state.original_text:
-        st.session_state.original_text = latest_text
-        if st.session_state.translator:
-            translated = st.session_state.translator.translate(latest_text, use_context=True)
-            st.session_state.translated_text = translated
-            print(f"[APP] 翻译: '{latest_text}' → '{translated}'")
-        else:
-            st.session_state.translated_text = f"[待翻译] {latest_text}"
-    
-    time.sleep(0.5)
-    st.rerun()
+    # 检查静音超时停止标志
+    if st.session_state.should_stop:
+        print("[APP] 检测到停止标志，执行停止操作")
+        on_stop()
+    else:
+        latest_text = st.session_state.recognizer.get_latest_text()
+        print(f"[APP] 获取最新文本: '{latest_text}'")
+        
+        if latest_text and latest_text != st.session_state.original_text:
+            if auto_correct:
+                corrected_text = st.session_state.corrector.correct_with_context(
+                    latest_text,
+                    confidence=0.7
+                )
+                if corrected_text != latest_text:
+                    print(f"[纠错] 应用修正: {latest_text} → {corrected_text}")
+                latest_text = corrected_text
+            st.session_state.original_text = latest_text
+            if st.session_state.translator:
+                translated = st.session_state.translator.translate(latest_text, use_context=True)
+                st.session_state.translated_text = translated
+                print(f"[APP] 翻译: '{latest_text}' → '{translated}'")
+            else:
+                st.session_state.translated_text = f"[待翻译] {latest_text}"
+        
+        time.sleep(0.5)
+        st.rerun()
 
 st.info(f"💡 提示：点击「开始同传」后，请允许浏览器访问麦克风权限。静音超过{silence_timeout}秒将自动停止同传。")

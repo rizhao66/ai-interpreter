@@ -24,8 +24,9 @@ class LocalTranslator:
         self.cache = {}  # 翻译缓存
         self.history = []  # 历史记录
         self.dictionary = self._load_dictionary()
+        self.phrases = self._load_phrases()  # 短语词典
         print(f"✅ 使用本地词典翻译器 (源语言: {source_lang}, 目标语言: {target_lang})")
-        print(f"📚 词典包含 {len(self.dictionary)} 个词汇")
+        print(f"📚 词典包含 {len(self.dictionary)} 个词汇, {len(self.phrases)} 个短语")
 
     def _load_dictionary(self) -> Dict[str, str]:
         """加载本地词典"""
@@ -507,7 +508,7 @@ class LocalTranslator:
         if text in self.cache:
             return self.cache[text]
 
-        # 分词翻译
+        # 先进行逐词翻译
         words = text.split()
         translated_words = []
         
@@ -516,16 +517,29 @@ class LocalTranslator:
             clean_word = re.sub(r'[^\w\']', '', word)
             punctuation = re.sub(r'[\w\']', '', word)
             
-            # 翻译
-            translated = self._translate_word(clean_word)
+            # 翻译（大小写不敏感）
+            translated_word = self._translate_word(clean_word)
+            
+            # 保持原词的大小写格式
+            if clean_word.isupper():
+                translated_word = translated_word.upper()
+            elif clean_word.istitle():
+                translated_word = translated_word.capitalize()
             
             # 添加标点
             if punctuation:
-                translated += punctuation
+                translated_word += punctuation
             
-            translated_words.append(translated)
+            translated_words.append(translated_word)
 
         translated = ' '.join(translated_words)
+
+        # 使用短语匹配优化翻译结果
+        translated = self._apply_phrase_optimization(translated, text)
+
+        # 应用中文后处理（调整语序和格式）
+        if self.target_lang.lower().startswith('zh'):
+            translated = self._apply_chinese_post_processing(translated)
 
         # 存入缓存
         self.cache[text] = translated
@@ -542,6 +556,41 @@ class LocalTranslator:
 
         return translated
 
+    def _apply_phrase_optimization(self, translated: str, original: str) -> str:
+        """应用短语优化 - 用短语翻译替换逐词翻译结果"""
+        original_lower = original.lower()
+        
+        # 按短语长度从长到短排序，优先匹配长短语
+        sorted_phrases = sorted(self.phrases.keys(), key=lambda x: -len(x))
+        
+        for phrase in sorted_phrases:
+            if phrase in original_lower:
+                # 找到匹配的短语
+                # 获取短语在原句中的位置
+                start_idx = original_lower.index(phrase)
+                end_idx = start_idx + len(phrase)
+                
+                # 获取原短语（保持大小写）
+                original_phrase = original[start_idx:end_idx]
+                
+                # 获取短语翻译
+                phrase_translation = self.phrases[phrase]
+                
+                # 替换翻译结果中的对应部分
+                # 先尝试直接替换
+                translated = translated.replace(
+                    self._phrase_to_word_by_word(phrase),
+                    phrase_translation
+                )
+        
+        return translated
+
+    def _phrase_to_word_by_word(self, phrase: str) -> str:
+        """将短语转换为逐词翻译形式，用于替换"""
+        words = phrase.split()
+        translated_words = [self._translate_word(word) for word in words]
+        return ' '.join(translated_words)
+
     def translate_with_context(self, text: str, context_window: int = 3) -> str:
         """带上下文的翻译"""
         return self.translate(text, use_context=True)
@@ -551,6 +600,659 @@ class LocalTranslator:
         self.cache = {}
         self.history = []
         print("翻译缓存已清空")
+
+    def _load_phrases(self) -> Dict[str, str]:
+        """加载常用短语词典"""
+        en_zh_phrases = {
+            # 问候语
+            "how are you": "你好吗",
+            "how are you doing": "你好吗",
+            "how do you do": "你好",
+            "nice to meet you": "很高兴认识你",
+            "good morning": "早上好",
+            "good afternoon": "下午好",
+            "good evening": "晚上好",
+            "good night": "晚安",
+            "see you later": "再见",
+            "see you tomorrow": "明天见",
+            "see you soon": "回头见",
+            "long time no see": "好久不见",
+            "what's up": "最近怎么样",
+            
+            # 感谢与道歉
+            "thank you very much": "非常感谢",
+            "thank you so much": "非常感谢",
+            "thanks a lot": "非常感谢",
+            "you're welcome": "不客气",
+            "no problem": "没问题",
+            "it's okay": "没关系",
+            "sorry about that": "抱歉",
+            "excuse me": "打扰一下",
+            "my mistake": "我的错",
+            
+            # 日常表达
+            "I think": "我认为",
+            "I know": "我知道",
+            "I understand": "我明白",
+            "I see": "我明白了",
+            "I mean": "我的意思是",
+            "I guess": "我猜",
+            "I hope": "我希望",
+            "I want": "我想要",
+            "I need": "我需要",
+            "I like": "我喜欢",
+            "I love": "我爱",
+            "I am": "我是",
+            "I have": "我有",
+            "I will": "我会",
+            "I can": "我能",
+            "I should": "我应该",
+            "I must": "我必须",
+            "let me": "让我",
+            "let's go": "走吧",
+            "let's see": "让我们看看",
+            "what is": "是什么",
+            "what are": "是什么",
+            "where is": "在哪里",
+            "where are": "在哪里",
+            "who is": "是谁",
+            "who are": "是谁",
+            "when is": "什么时候",
+            "why is": "为什么",
+            "how is": "怎么样",
+            "how are": "怎么样",
+            "this is": "这是",
+            "that is": "那是",
+            "these are": "这些是",
+            "those are": "那些是",
+            "there is": "有",
+            "there are": "有",
+            "it is": "它是",
+            "is it": "是它吗",
+            "are you": "你是",
+            "do you": "你做",
+            "does it": "它做",
+            "can you": "你能",
+            "will you": "你会",
+            "would you": "你愿意",
+            "could you": "你能",
+            "should you": "你应该",
+            "have you": "你有",
+            "has it": "它有",
+            "had you": "你曾经",
+            
+            # 短语动词
+            "looking for": "寻找",
+            "looking at": "看着",
+            "looking forward to": "期待",
+            "looking into": "调查",
+            "getting up": "起床",
+            "getting ready": "准备",
+            "getting along": "相处",
+            "getting better": "好转",
+            "making sense": "有意义",
+            "making progress": "取得进展",
+            "making money": "赚钱",
+            "taking care": "照顾",
+            "taking place": "发生",
+            "taking time": "花费时间",
+            "going on": "继续",
+            "going out": "出去",
+            "going home": "回家",
+            "coming back": "回来",
+            "coming from": "来自",
+            "coming up": "即将到来",
+            "working on": "致力于",
+            "working out": "解决",
+            "working hard": "努力工作",
+            "thinking about": "思考",
+            "thinking of": "想到",
+            "talking about": "谈论",
+            "talking to": "和...交谈",
+            "learning about": "学习",
+            "learning from": "从...学习",
+            "trying to": "试图",
+            "trying out": "尝试",
+            "starting to": "开始",
+            "starting with": "从...开始",
+            "ending with": "以...结束",
+            "getting to know": "了解",
+            "getting used to": "习惯",
+            "putting forward": "提出",
+            "putting together": "组装",
+            "putting off": "推迟",
+            "giving up": "放弃",
+            "giving away": "赠送",
+            "giving back": "归还",
+            "bringing up": "提出",
+            "bringing down": "降低",
+            "bringing forward": "提前",
+            "taking over": "接管",
+            "taking away": "拿走",
+            "taking back": "收回",
+            "setting up": "建立",
+            "setting out": "出发",
+            "setting off": "出发",
+            "carrying out": "执行",
+            "carrying on": "继续",
+            "carrying away": "带走",
+            "looking after": "照顾",
+            "looking out": "注意",
+            "looking through": "浏览",
+            "turning on": "打开",
+            "turning off": "关闭",
+            "turning up": "调高",
+            "turning down": "调低",
+            "turning around": "转身",
+            "turning into": "变成",
+            "putting on": "穿上",
+            "putting off": "推迟",
+            "putting out": "熄灭",
+            "taking off": "脱下",
+            "taking out": "取出",
+            "taking in": "吸收",
+            "giving in": "屈服",
+            "giving up": "放弃",
+            "bringing in": "引进",
+            "bringing up": "抚养",
+            "working out": "锻炼",
+            "going through": "经历",
+            "going over": "复习",
+            "going around": "四处走动",
+            "coming across": "遇到",
+            "coming up with": "想出",
+            "getting through": "通过",
+            "getting around": "避开",
+            "making up": "弥补",
+            "making out": "辨认",
+            "making up for": "补偿",
+            "breaking down": "分解",
+            "breaking up": "分手",
+            "breaking out": "爆发",
+            "turning out": "结果是",
+            "turning over": "翻转",
+            "looking up": "查阅",
+            "looking down": "看不起",
+            "looking forward": "期待",
+            "getting down": "沮丧",
+            "getting off": "下车",
+            "getting on": "上车",
+            "getting through": "完成",
+            "setting in": "开始",
+            "setting up": "设置",
+            "carrying on": "继续",
+            "carrying out": "开展",
+            "taking place": "发生",
+            "taking part": "参与",
+            "taking care of": "照顾",
+            "looking for": "寻找",
+            "looking at": "查看",
+            "looking after": "照料",
+            "thinking about": "考虑",
+            "thinking over": "仔细考虑",
+            "talking about": "讨论",
+            "talking over": "商量",
+            "learning from": "向...学习",
+            "learning about": "了解",
+            "trying out": "试验",
+            "trying on": "试穿",
+            "starting off": "出发",
+            "starting up": "启动",
+            "ending up": "最终",
+            "ending with": "以...结束",
+            
+            # 常用表达
+            "of course": "当然",
+            "in fact": "事实上",
+            "actually": "实际上",
+            "basically": "基本上",
+            "generally": "一般来说",
+            "specifically": "具体来说",
+            "especially": "特别",
+            "particularly": "尤其",
+            "mainly": "主要",
+            "mostly": "大部分",
+            "almost": "几乎",
+            "nearly": "几乎",
+            "hardly": "几乎不",
+            "barely": "勉强",
+            "scarcely": "几乎没有",
+            "completely": "完全",
+            "totally": "完全",
+            "absolutely": "绝对",
+            "definitely": "肯定",
+            "certainly": "当然",
+            "probably": "可能",
+            "possibly": "可能",
+            "maybe": "也许",
+            "perhaps": "也许",
+            "likely": "很可能",
+            "unlikely": "不太可能",
+            "surely": "肯定",
+            "really": "真的",
+            "very much": "非常",
+            "so much": "非常",
+            "too much": "太多",
+            "as much": "同样多",
+            "as well": "也",
+            "as well as": "以及",
+            "such as": "例如",
+            "for example": "例如",
+            "for instance": "例如",
+            "in addition": "另外",
+            "furthermore": "此外",
+            "moreover": "而且",
+            "however": "然而",
+            "nevertheless": "尽管如此",
+            "although": "虽然",
+            "even though": "即使",
+            "though": "虽然",
+            "unless": "除非",
+            "until": "直到",
+            "since": "自从",
+            "because": "因为",
+            "because of": "因为",
+            "due to": "由于",
+            "owing to": "由于",
+            "thanks to": "多亏",
+            "despite": "尽管",
+            "in spite of": "尽管",
+            "regardless of": "不管",
+            "instead of": "而不是",
+            "in place of": "代替",
+            "according to": "根据",
+            "based on": "基于",
+            "depending on": "取决于",
+            "regarding": "关于",
+            "concerning": "关于",
+            "with respect to": "关于",
+            "as for": "至于",
+            "as to": "关于",
+            "in terms of": "在...方面",
+            "in terms with": "与...一致",
+            "along with": "连同",
+            "together with": "一起",
+            "alongside": "在旁边",
+            "next to": "旁边",
+            "close to": "接近",
+            "far from": "远离",
+            "apart from": "除了",
+            "except for": "除了",
+            "but for": "要不是",
+            "other than": "除了",
+            "rather than": "而不是",
+            "more than": "超过",
+            "less than": "少于",
+            "fewer than": "少于",
+            "better than": "比...好",
+            "worse than": "比...差",
+            "as good as": "和...一样好",
+            "as bad as": "和...一样差",
+            "as long as": "只要",
+            "as far as": "就...而言",
+            "as soon as": "一...就",
+            "as much as": "尽可能",
+            "as little as": "尽可能少",
+            "so that": "以便",
+            "in order that": "为了",
+            "so as to": "以便",
+            "in order to": "为了",
+            "so...that": "如此...以至于",
+            "such...that": "如此...以至于",
+            "too...to": "太...而不能",
+            "enough to": "足够...可以",
+            "not...until": "直到...才",
+            "no sooner...than": "一...就",
+            "hardly...when": "一...就",
+            "scarcely...when": "一...就",
+            "the more...the more": "越...越",
+            "the less...the less": "越少...越少",
+            
+            # 技术术语
+            "artificial intelligence": "人工智能",
+            "machine learning": "机器学习",
+            "deep learning": "深度学习",
+            "neural network": "神经网络",
+            "computer vision": "计算机视觉",
+            "natural language processing": "自然语言处理",
+            "NLP": "自然语言处理",
+            "CV": "计算机视觉",
+            "AI": "人工智能",
+            "ML": "机器学习",
+            "DL": "深度学习",
+            "data science": "数据科学",
+            "big data": "大数据",
+            "cloud computing": "云计算",
+            "internet of things": "物联网",
+            "IoT": "物联网",
+            "software engineering": "软件工程",
+            "web development": "网页开发",
+            "mobile development": "移动开发",
+            "database management": "数据库管理",
+            "algorithm design": "算法设计",
+            "programming language": "编程语言",
+            "source code": "源代码",
+            "version control": "版本控制",
+            "debugging": "调试",
+            "testing": "测试",
+            "deployment": "部署",
+            "API": "应用程序接口",
+            "REST API": "REST接口",
+            "framework": "框架",
+            "library": "库",
+            "module": "模块",
+            "function": "函数",
+            "method": "方法",
+            "class": "类",
+            "object": "对象",
+            "variable": "变量",
+            "constant": "常量",
+            "parameter": "参数",
+            "return value": "返回值",
+            "error handling": "错误处理",
+            "exception handling": "异常处理",
+            "memory management": "内存管理",
+            "performance optimization": "性能优化",
+            "security": "安全",
+            "encryption": "加密",
+            "authentication": "认证",
+            "authorization": "授权",
+            "user interface": "用户界面",
+            "UI": "用户界面",
+            "user experience": "用户体验",
+            "UX": "用户体验",
+            "frontend": "前端",
+            "backend": "后端",
+            "full stack": "全栈",
+            "server": "服务器",
+            "client": "客户端",
+            "network": "网络",
+            "protocol": "协议",
+            "HTTP": "超文本传输协议",
+            "HTTPS": "安全超文本传输协议",
+            "TCP": "传输控制协议",
+            "IP": "互联网协议",
+            "DNS": "域名系统",
+            "URL": "统一资源定位符",
+            "HTML": "超文本标记语言",
+            "CSS": "层叠样式表",
+            "JavaScript": "JavaScript",
+            "Python": "Python",
+            "Java": "Java",
+            "C++": "C++",
+            "C#": "C#",
+            "Go": "Go",
+            "Rust": "Rust",
+            "TypeScript": "TypeScript",
+            "React": "React",
+            "Vue": "Vue",
+            "Angular": "Angular",
+            "Node.js": "Node.js",
+            "Django": "Django",
+            "Flask": "Flask",
+            "SQL": "结构化查询语言",
+            "MySQL": "MySQL",
+            "PostgreSQL": "PostgreSQL",
+            "MongoDB": "MongoDB",
+            "Redis": "Redis",
+            "Docker": "Docker",
+            "Kubernetes": "Kubernetes",
+            "AWS": "亚马逊云服务",
+            "Azure": "微软云",
+            "Google Cloud": "谷歌云",
+            "Git": "Git",
+            "GitHub": "GitHub",
+            "GitLab": "GitLab",
+            "CI/CD": "持续集成/持续部署",
+            "DevOps": "开发运维",
+            "Agile": "敏捷",
+            "Scrum": "Scrum",
+            "Kanban": "看板",
+            "waterfall": "瀑布",
+            "requirements": "需求",
+            "design": "设计",
+            "implementation": "实现",
+            "maintenance": "维护",
+            "documentation": "文档",
+            "code review": "代码审查",
+            "pair programming": "结对编程",
+            "standup meeting": "站会",
+            "sprint": "冲刺",
+            "backlog": "待办事项",
+            "story point": "故事点",
+            "velocity": "速度",
+            "burndown chart": "燃尽图",
+            
+            # 情感表达
+            "I'm happy": "我很高兴",
+            "I'm sad": "我很伤心",
+            "I'm tired": "我很累",
+            "I'm hungry": "我很饿",
+            "I'm thirsty": "我很渴",
+            "I'm sick": "我生病了",
+            "I'm busy": "我很忙",
+            "I'm free": "我有空",
+            "I'm ready": "我准备好了",
+            "I'm late": "我迟到了",
+            "I'm early": "我来早了",
+            "I'm sorry": "对不起",
+            "I'm glad": "我很高兴",
+            "I'm afraid": "我害怕",
+            "I'm worried": "我担心",
+            "I'm excited": "我很兴奋",
+            "I'm nervous": "我很紧张",
+            "I'm confused": "我很困惑",
+            "I'm surprised": "我很惊讶",
+            "I'm disappointed": "我很失望",
+            "I'm satisfied": "我很满意",
+            "I'm grateful": "我很感激",
+            "I'm proud": "我很自豪",
+            "I'm ashamed": "我很惭愧",
+            "I'm embarrassed": "我很尴尬",
+            "I'm relieved": "我很宽慰",
+            "I'm bored": "我很无聊",
+            "I'm curious": "我很好奇",
+            "I'm interested": "我很感兴趣",
+            "I'm confident": "我很自信",
+            "I'm uncertain": "我不确定",
+            "I'm hopeful": "我抱有希望",
+            "I'm hopeless": "我很绝望",
+            
+            # 时间表达
+            "right now": "现在",
+            "at the moment": "此刻",
+            "currently": "当前",
+            "presently": "目前",
+            "nowadays": "如今",
+            "these days": "这些天",
+            "recently": "最近",
+            "lately": "最近",
+            "just now": "刚才",
+            "a moment ago": "刚才",
+            "yesterday": "昨天",
+            "the day before yesterday": "前天",
+            "today": "今天",
+            "tomorrow": "明天",
+            "the day after tomorrow": "后天",
+            "this week": "这周",
+            "last week": "上周",
+            "next week": "下周",
+            "this month": "这个月",
+            "last month": "上个月",
+            "next month": "下个月",
+            "this year": "今年",
+            "last year": "去年",
+            "next year": "明年",
+            "in the morning": "早上",
+            "in the afternoon": "下午",
+            "in the evening": "晚上",
+            "at night": "夜里",
+            "at noon": "中午",
+            "at midnight": "午夜",
+            "in an hour": "一小时后",
+            "in a minute": "一分钟后",
+            "in a second": "一秒钟后",
+            "for a while": "一会儿",
+            "for a long time": "很长时间",
+            "since then": "从那以后",
+            "from now on": "从现在开始",
+            "until now": "直到现在",
+            "up to now": "到目前为止",
+            "so far": "到目前为止",
+            "as yet": "到目前为止",
+            "already": "已经",
+            "still": "仍然",
+            "yet": "还",
+            "anymore": "不再",
+            "no longer": "不再",
+            
+            # 数量表达
+            "a lot of": "很多",
+            "lots of": "很多",
+            "plenty of": "大量",
+            "a great deal of": "大量",
+            "a large number of": "大量",
+            "a small number of": "少量",
+            "a few": "一些",
+            "few": "很少",
+            "a little": "一点",
+            "little": "几乎没有",
+            "several": "几个",
+            "some": "一些",
+            "any": "任何",
+            "all": "所有",
+            "both": "两者都",
+            "neither": "两者都不",
+            "either": "要么",
+            "each": "每个",
+            "every": "每一个",
+            "many": "许多",
+            "much": "许多",
+            "more": "更多",
+            "most": "最多",
+            "less": "更少",
+            "least": "最少",
+            "enough": "足够",
+            "too many": "太多",
+            "too much": "太多",
+            "not enough": "不够",
+            "one of": "之一",
+            "none of": "没有一个",
+            "half of": "一半",
+            "part of": "一部分",
+            "all of": "全部",
+            "the rest of": "其余",
+            "a pair of": "一对",
+            "a couple of": "一对",
+            "a group of": "一组",
+            "a set of": "一套",
+            "a series of": "一系列",
+            "a number of": "若干",
+            "a total of": "总共",
+            "an average of": "平均",
+            "a maximum of": "最多",
+            "a minimum of": "最少",
+        }
+        
+        if self.source_lang.lower() == 'en' and self.target_lang.lower().startswith('zh'):
+            return en_zh_phrases
+        else:
+            return {}
+
+    def _apply_chinese_post_processing(self, translated_text: str) -> str:
+        """中文后处理 - 调整语序和格式"""
+        # 移除多余的空格（中文不需要单词间空格）
+        translated_text = translated_text.replace("  ", " ")
+        
+        # 调整常见句式的语序
+        # "我 是 学生" -> "我是学生"
+        translated_text = re.sub(r'(我|你|他|她|它|我们|你们|他们) 是 ', r'\1是', translated_text)
+        
+        # "我 有 书" -> "我有书"
+        translated_text = re.sub(r'(我|你|他|她|它|我们|你们|他们) 有 ', r'\1有', translated_text)
+        
+        # "我 想 去" -> "我想去"
+        translated_text = re.sub(r'(我|你|他|她|它|我们|你们|他们) 想 ', r'\1想', translated_text)
+        
+        # "我 喜欢 吃" -> "我喜欢吃"
+        translated_text = re.sub(r'(我|你|他|她|它|我们|你们|他们) 喜欢 ', r'\1喜欢', translated_text)
+        
+        # "我 爱 你" -> "我爱你"
+        translated_text = re.sub(r'(我|你|他|她|它|我们|你们|他们) 爱 ', r'\1爱', translated_text)
+        
+        # "我 需要 帮助" -> "我需要帮助"
+        translated_text = re.sub(r'(我|你|他|她|它|我们|你们|他们) 需要 ', r'\1需要', translated_text)
+        
+        # "我 会 说" -> "我会说"
+        translated_text = re.sub(r'(我|你|他|她|它|我们|你们|他们) 会 ', r'\1会', translated_text)
+        
+        # "我 能 做" -> "我能做"
+        translated_text = re.sub(r'(我|你|他|她|它|我们|你们|他们) 能 ', r'\1能', translated_text)
+        
+        # "我 应该 去" -> "我应该去"
+        translated_text = re.sub(r'(我|你|他|她|它|我们|你们|他们) 应该 ', r'\1应该', translated_text)
+        
+        # "我 必须 做" -> "我必须做"
+        translated_text = re.sub(r'(我|你|他|她|它|我们|你们|他们) 必须 ', r'\1必须', translated_text)
+        
+        # "这 是" -> "这是"
+        translated_text = re.sub(r'(这|那) 是 ', r'\1是', translated_text)
+        
+        # "有 一个" -> "有一个"
+        translated_text = re.sub(r'有 一个 ', r'有一个', translated_text)
+        
+        # "非常 感谢" -> "非常感谢"
+        translated_text = re.sub(r'非常 感谢', r'非常感谢', translated_text)
+        
+        # "很 高兴" -> "很高兴"
+        translated_text = re.sub(r'很 高兴', r'很高兴', translated_text)
+        
+        # "太 好了" -> "太好了"
+        translated_text = re.sub(r'太 好了', r'太好了', translated_text)
+        
+        # "很 多" -> "很多"
+        translated_text = re.sub(r'很 多', r'很多', translated_text)
+        
+        # "更 好" -> "更好"
+        translated_text = re.sub(r'更 好', r'更好', translated_text)
+        
+        # "更 多" -> "更多"
+        translated_text = re.sub(r'更 多', r'更多', translated_text)
+        
+        # "最 好" -> "最好"
+        translated_text = re.sub(r'最 好', r'最好', translated_text)
+        
+        # "最 多" -> "最多"
+        translated_text = re.sub(r'最 多', r'最多', translated_text)
+        
+        # "不 是" -> "不是"
+        translated_text = re.sub(r'不 是 ', r'不是', translated_text)
+        
+        # "不 要" -> "不要"
+        translated_text = re.sub(r'不 要 ', r'不要', translated_text)
+        
+        # "不 会" -> "不会"
+        translated_text = re.sub(r'不 会 ', r'不会', translated_text)
+        
+        # "不 能" -> "不能"
+        translated_text = re.sub(r'不 能 ', r'不能', translated_text)
+        
+        # "没 有" -> "没有"
+        translated_text = re.sub(r'没 有 ', r'没有', translated_text)
+        
+        # 移除标点前的空格
+        translated_text = translated_text.replace(" 。", "。")
+        translated_text = translated_text.replace(" ，", "，")
+        translated_text = translated_text.replace(" ！", "！")
+        translated_text = translated_text.replace(" ？", "？")
+        translated_text = translated_text.replace(" ；", "；")
+        translated_text = translated_text.replace(" ：", "：")
+        translated_text = translated_text.replace(" 、", "、")
+        
+        # 移除多余空格
+        translated_text = re.sub(r'\s+', ' ', translated_text).strip()
+        
+        return translated_text
 
 
 # 测试代码
@@ -568,6 +1270,13 @@ if __name__ == "__main__":
         "Good morning!",
         "Thank you very much.",
         "See you later.",
+        "I am learning Python.",
+        "I love machine learning.",
+        "What is your name?",
+        "Where are you from?",
+        "I am very happy.",
+        "I need your help.",
+        "Can you help me?",
     ]
     
     for text in test_texts:

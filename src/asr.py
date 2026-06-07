@@ -28,7 +28,9 @@ class AudioRecognizer:
         self.is_listening = False
         self.silence_timeout = silence_timeout  # 静音超时时间
         self.last_audio_time = time.time()      # 最后有声音的时间
-        self.silence_threshold = 0.01           # 静音阈值
+        self.silence_threshold = 0.03           # 静音阈值（提高以过滤环境噪音）
+        self.quiet_frames = 0                   # 连续静音帧数
+        self.quiet_frame_threshold = 10         # 连续静音帧阈值（约5秒）
 
         self.latest_text=""
         self.sample_rate = 16000  # Whisper 需要 16kHz
@@ -95,9 +97,17 @@ class AudioRecognizer:
             
             # 检测是否有声音（通过计算音频能量）
             audio_energy = np.mean(np.abs(audio_data))
+            
             if audio_energy > self.silence_threshold:
                 self.last_audio_time = time.time()  # 更新最后有声音的时间
+                self.quiet_frames = 0  # 重置静音帧计数
                 #print(f"[DEBUG] 检测到声音，能量: {audio_energy}")
+            else:
+                self.quiet_frames += 1
+                # 检测连续静音帧超过阈值
+                if self.quiet_frames >= self.quiet_frame_threshold:
+                    #print(f"[DEBUG] 连续静音帧: {self.quiet_frames}")
+                    pass
 
         return (None, pyaudio.paContinue)
 
