@@ -62,7 +62,7 @@ ai-interpreter/
 安装步骤
 1. 克隆项目
 ```bash
-git clone https://github.com/你的用户名/ai-interpreter.git
+git clone https://github.com/rizhao66/ai-interpreter.git
 cd ai-interpreter
 
 2.安装依赖
